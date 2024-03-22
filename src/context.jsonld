@@ -1,0 +1,30 @@
+{
+    "@context": {
+        "obo": "http://purl.obolibrary.org/obo/",
+        "bp3": {
+            "@id": "http://www.biopax.org/release/biopax-level3.owl#",
+            "@type": "@id"
+        },
+        "bp3:MolecularInteraction": "bp3:MolecularInteraction",
+        "bp3:displayName": "bp3:displayName",
+        "bp3:dataSource": {
+            "@id": "bp3:dataSource",
+            "@type": "@id"
+        },
+        "bp3:evidence": {
+            "@id": "bp3:evidence",
+            "@type": "@id"
+        },
+        "bp3:name": "bp3:name",
+        "bp3:participant": "bp3:participant",
+        "bp3:confidence": "bp3:confidence",
+        "cpdb": "http://cpdb.molgen.mpg.de/interactions/",
+        "uniprot_entry": "http://purl.uniprot.org/core/mnemonic#",
+        "uniprot_id": "http://identifiers.org/uniprot/",
+        "genename": "https://identifiers.org/hgnc.symbol/",
+        "hgnc_id": "http://identifiers.org/hgnc/",
+        "entrez_gene": "http://identifiers.org/ncbigene/",
+        "ensembl_gene": "http://identifiers.org/ensembl/",
+        "pubmed": "http://rdf.ncbi.nlm.nih.gov/pubmed/"
+    }
+}

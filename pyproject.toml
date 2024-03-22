@@ -1,0 +1,19 @@
+[tool.poetry]
+name = "database-json-ld-conversion"
+version = "0.1.0"
+description = ""
+authors = ["Takahiro.N <nakaba-takahiro@mki.co.jp>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.10"
+pyld = "^2.0.4"
+tqdm = "^4.66.2"
+
+
+[tool.poetry.group.dev.dependencies]
+snakeviz = "^2.2.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

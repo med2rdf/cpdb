@@ -1,0 +1,11 @@
+{
+    "source_databases": "http://www.biopax.org/release/biopax-level3.owl#dataSource",
+    "interaction_publications": "http://www.biopax.org/release/biopax-level3.owl#evidence",
+    "interaction_participants__uniprot_entry": "http://purl.uniprot.org/core/mnemonic#",
+    "interaction_participants__uniprot_id": "http://identifiers.org/uniprot/",
+    "interaction_participants__genename": "https://identifiers.org/hgnc.symbol/",
+    "interaction_participants__hgnc_id": "http://identifiers.org/hgnc/",
+    "interaction_participants__entrez_gene": "http://identifiers.org/ncbigene/",
+    "interaction_participants__ensembl_gene": "http://identifiers.org/ensembl/",
+    "interaction_confidence": "http://www.biopax.org/release/biopax-level3.owl#confidence"
+}
