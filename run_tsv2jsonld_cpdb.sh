@@ -7,7 +7,7 @@ show_help() {
         -v "$(pwd)/src:/src" \
         -u "$(id -u $USER):$(id -g $USER)" \
         $DOCKER_IMAGE \
-        poetry run python /src/cpdb2jsonld.py -h
+        poetry run python /src/cpdb2jsonld.py tsv2jsonld --help
 }
 
 # オプションと位置引数を処理する
@@ -64,7 +64,7 @@ docker run -it --rm \
     -v "$(pwd)/src:/src" \
     -u "$(id -u $USER):$(id -g $USER)" \
     $DOCKER_IMAGE \
-    poetry run python /src/cpdb2jsonld.py \
+    poetry run python /src/cpdb2jsonld.py tsv2jsonld \
     /input/$(basename "$input_file_path") \
     /output/$(basename "$output_file_path") \
     "${options_args[@]}"

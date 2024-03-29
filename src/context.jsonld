@@ -1,30 +1,45 @@
 {
     "@context": {
+        "rdf": "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
+        "rdfs": "http://www.w3.org/2000/01/rdf-schema#",
+        "xsd": "http://www.w3.org/2001/XMLSchema#",
+        "dc": "http://purl.org/dc/elements/1.1/",
+        "dct": "http://purl.org/dc/terms/",
+        "skos": "http://www.w3.org/2004/02/skos/core#",
         "obo": "http://purl.obolibrary.org/obo/",
-        "bp3": {
-            "@id": "http://www.biopax.org/release/biopax-level3.owl#",
-            "@type": "@id"
-        },
-        "bp3:MolecularInteraction": "bp3:MolecularInteraction",
-        "bp3:displayName": "bp3:displayName",
-        "bp3:dataSource": {
-            "@id": "bp3:dataSource",
-            "@type": "@id"
-        },
-        "bp3:evidence": {
-            "@id": "bp3:evidence",
-            "@type": "@id"
-        },
-        "bp3:name": "bp3:name",
-        "bp3:participant": "bp3:participant",
-        "bp3:confidence": "bp3:confidence",
-        "cpdb": "http://cpdb.molgen.mpg.de/interactions/",
-        "uniprot_entry": "http://purl.uniprot.org/core/mnemonic#",
+        "pmid": "http://rdf.ncbi.nlm.nih.gov/pubmed/",
+        "pdb": "https://rdf.wwpdb.org/pdb/",
+        "m2r": "http://med2rdf.org/ontology/med2rdf#",
+        "cpdb": "http://med2rdf.org/dataset/cpdb/",
+        "cpdbo": "http://med2rdf.org/ontology/cpdb#",
+        "taxid": "http://identifiers.org/taxonomy/",
         "uniprot_id": "http://identifiers.org/uniprot/",
-        "genename": "https://identifiers.org/hgnc.symbol/",
-        "hgnc_id": "http://identifiers.org/hgnc/",
-        "entrez_gene": "http://identifiers.org/ncbigene/",
-        "ensembl_gene": "http://identifiers.org/ensembl/",
-        "pubmed": "http://rdf.ncbi.nlm.nih.gov/pubmed/"
+        "uniprot_entry": "http://purl.uniprot.org/core/mnemonic#",
+        "label": {
+            "@id": "rdfs:label"
+        },
+        "participant": {
+            "@id": "m2r:participant",
+            "@type": "@id"
+        },
+        "evidence": {
+            "@id": "cpdbo:evidence"
+        },
+        "reference": {
+            "@id": "dct:references",
+            "@type": "@id"
+        },
+        "data_source": {
+            "@id": "m2r:provenance",
+            "@type": "@id"
+        },
+        "confidence": {
+            "@id": "cpdbo:confidence",
+            "@type": "@id"
+        },
+        "taxonomy": {
+            "@id": "obo:RO_0002162",
+            "@type": "@id"
+        }
     }
 }

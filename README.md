@@ -1,104 +1,169 @@
 # ConsensusPathDB to JSON-LD
 
-## Folder Structure
+## 1. Introduction
+
+This program converts TSV files from the ConsensusPathDB (CPDB) into JSON-LD formatted JSON Lines.
+
+## 2. Directory Structure
 
 ```plaintext
 .
-├── src/
-│   ├── cpdb2jsonld.py          # Python program for converting ConsensusPathDB
-│   ├── settings.py             # Configuration file for the conversion program
-│   ├── column_mapping.json     # File to map TSV headers to IRI
-│   └── context.jsonld          # File defining the JSON-LD context
-├── Dockerfile                  # Definition file for Docker image
-├── build_tsv2jsonld_cpdb.sh    # Script to build the Docker image
-├── run_tsv2jsonld_cpdb.sh      # Script to run the conversion program
-├── pyproject.toml
-├── poetry.lock
-└── README.md
+┣ data/                      # Default data path
+┣ src/
+┃  ┣ column_mapper/
+┃  ┃  ┣ human.json           # Definition file for mapping human TSV headers to IRIs
+┃  ┃  ┣ mouse.json           # Definition file for mapping mouse TSV headers to IRIs
+┃  ┃  ┗ yeast.json           # Definition file for mapping yeast TSV headers to IRIs
+┃  ┣ cpdb2jsonld.py          # Python program for CPDB conversion
+┃  ┣ settings.py             # Configuration file for the conversion program
+┃  ┣ taxonomy.json           # Definition file for mapping taxonomy names to taxonomy IDs
+┃  ┣ urls.txt                # List of URLs for CPDB TSV files
+┃  ┗ context.jsonld          # File defining the JSON-LD context
+┣ Dockerfile                 # Definition file for the Docker image
+┣ build_tsv2jsonld_cpdb.sh   # Script to build the Docker image
+┣ run_tsv2jsonld_cpdb.sh     # Script to execute the conversion program
+┣ pyproject.toml
+┣ poetry.lock
+┗ README.md
 ```
 
-## Environment
+## 3. Environment
 
-It is recommended to run this program within a Docker container for consistency across different computing environments.
+Execution within a Docker container is recommended.
 
 - Python 3.11
-  - PyLD (for processing JSON-LD)
-  - tqdm (for progress bars)
+  - PyLD
+  - Typer
+  - Loguru
+  - Rich
 
-## Building the Docker Image (First Time Only)
+## 4. Building the Docker Image (First Time Only)
 
-To build the Docker image, execute the provided script.
+Execute the script to build the Docker image.
 
 ```bash
 bash build_tsv2jsonld_cpdb.sh
 ```
 
-Proceed to running the program once the build completes without errors.
+Once the build completes without errors, proceed to executing the program.
 
-## Running the Conversion Program
+## 5. Execution of the Conversion Program
 
-Execute the program using the following script.
+Execute the script to run the conversion program.
+
+Two types of conversion scripts are available:
+
+- `run_flow_tsv2jsonld_cpdb.sh`     # Executes the entire flow from file download to conversion based on the URL definition file
+- `run_tsv2jsonld_cpdb.sh`          # Passes the path of the manually downloaded DB TSV file as an argument for conversion
+
+### 5.1. run_flow_tsv2jsonld_cpdb.sh
+
+```bash
+bash run_flow_tsv2jsonld_cpdb.sh [options...]
+```
+
+#### 5.1.1. Arguments
+
+##### 5.1.1.1. `[options...]`
+
+Optional arguments.
+
+**`--hide-progress`**
+
+If specified, hides the progress bar that indicates the conversion progress.
+
+**`--jsonld-output`**
+
+If specified, after converting from TSV to .jsonl, this option generates .jsonld files based on the .jsonl file.
+
+The .jsonld files are split and output in the `<output_file_basename>_jsonld` folder created at the same directory level as the file specified for the .jsonl output.
+
+The size of each .jsonld file is determined by the `JSONLD_MAX_FILE_SIZE` in `src/settings.py`.
+
+### 5.2. run_tsv2jsonld_cpdb.sh
 
 ```bash
 bash run_tsv2jsonld_cpdb.sh <input_file> <output_file> [options...]
 ```
 
-Example:
+Example execution:
 
 ```bash
 bash run_tsv2jsonld_cpdb.sh data/ConsensusPathDB_human_PPI output/cpdb_converted.jsonl
 ```
 
-### About the Arguments
+#### 5.2.1. Arguments
 
-#### `<input_file>`
+##### 5.2.1.1. `<input_file>`
 
-Specify the path to the ConsensusPathDB TSV file you wish to convert.
+Specifies the path to the ConsensusPathDB TSV file to be input.
 
-#### `<output_file>`
+##### 5.2.1.2. `<output_file>`
 
-Specify the path where the JSON Lines file will be output.
+Specifies the path to the output JSON Lines file.
 
-#### `[options...]`
+##### 5.2.1.3. `[options...]`
 
-Optional arguments can be included.
+Optional arguments.
 
-**`--jsonld`**
+**`--taxonomy <taxonomy_name>`**
 
-After converting to JSON Lines, this option generates a JSON format JSON-LD file from the produced .jsonl file. The .jsonld files are split and saved in a folder named `<output_file_basename>_jsonld` at the same hierarchical level as the specified output file. Each .jsonld file's size adheres to `JSONLD_MAX_FILE_SIZE` defined in `src/settings.py`.
+Specifies the taxonomy. If this option is not included, the taxonomy name contained in the file name will be used.
 
-### Program Configuration
+**`--hide-progress`**
 
-The conversion program can be configured via `src/settings.py`, `src/column_mapping.json`, and `src/context.jsonld`.
+If specified, hides the progress bar that indicates the conversion progress.
 
-#### `settings.py`
+**`--jsonld-output`**
 
-Below is a list of configuration items and their default values in `settings.py`.
+After converting to JSON Lines, this generates JSON-LD formatted JSON files from the output .jsonl file.
 
-| Setting                      | Default Value                                             | Description                                                                   |
-|------------------------------|-----------------------------------------------------------|-------------------------------------------------------------------------------|
-| `src_dir`                    | `os.path.dirname(__file__)`                               | Path to the `src` directory.                                                  |
-| `DEBUG`                      | `False`                                                   | Toggle debug mode on/off.                                                     |
-| `HEADER_ROW_NUMBER`          | `2`                                                       | Row number where the header is located.                                       |
-| `HEADER_ROW_PREFIX`          | `"#  "`                                                   | Prefix for header rows.                                                       |
-| `CONTEXT_LOCAL_FILE_PATH`    | `os.path.join(src_dir, "context.jsonld")`                 | Path to the local context file. Defaults to `src/context.jsonld`.             |
-| `CONTEXT_FILE_URI`           | `"http://example.com/context.jsonld"`                     | URI for the context file. This URI is inserted into the JSON Lines context.   |
-| `COLUMN_MAPPING_FILE_PATH`   | `os.path.join(src_dir, "column_mapping.json")`            | Path to the column mapping file. Defaults to `src/column_mapping.json`.       |
-| `ERROR_LOG_FILE_PATH`        | `os.path.join(src_dir, "error.log")`                      | Path to the error log file. Defaults to `src/error.log`.                      |
-| `LOG_FORMAT`                 | `"%(asctime)s - %(name)s - %(levelname)s - %(message)s"`  | Log output format.                                                            |
-| `NODE_ID_PREFIX`             | `"cpdb:"`                                                 | Prefix for node IDs. Update needed if context definition changes.             |
-| `NODE_TYPE`                  | `"bp3:MolecularInteraction"`                              | Type of node.                                                                 |
-| `DATA_SOURCE_PREFIX`         | `"http://identifiers.org/"`                               | Prefix for data source URIs.                                                  |
-| `EVIDENCE_PREFIX`            | `"pubmed:"`                                               | Prefix for evidence.                                                          |
-| `PARTICIPANTS`               | Array of participant attributes                           | List of attributes for participants.                                          |
-| `LITERAL_PARTICIPANTS`       | `["genename"]`                                            | Attributes of participants referenced in a literal form.                     |
-| `UNIPROT_ENTRY_COLUMN`       | `"uniprot_entry"`                                         | Column name that refers to UniProt entry.                                     |
-| `JSONLD_MAX_FILE_SIZE`       | `3 * 1024 * 1024` (bytes)                                 | Maximum size for a JSON-LD file.                                              |
+The .jsonld files are split and output in the `<output_file_basename>_jsonld` folder created at the same directory level as the file specified for the .jsonl output.
 
-#### `column_mapping.json`
+The size of each .jsonld file is determined by the `JSONLD_MAX_FILE_SIZE` in `src/settings.py`.
 
-If there are updates to the ConsensusPathDB TSV file column headers, adjustments will be necessary here.
+### 5.3. Program Configuration
 
-#### `context.jsonld`
+Configure the conversion program using `src/settings.py`, `src/column_mapper/*.json`, `src/context.jsonld`, `src/taxonomy.json`, and `src/urls.txt`.
 
-This defines the context used when performing the JSON-LD transformation.
+#### 5.3.1. `settings.py`
+
+Below is a list of settings in settings.py with their default values.
+
+| Setting Name | Default Value | Description |
+| --- | --- | --- |
+| `src_dir` | `os.path.dirname(__file__)` | Path to the src directory |
+| `DEBUG` | `False` | Enable/disable debug mode |
+| `URL_LIST_FILE_PATH` | `os.path.join(src_dir, "urls.txt")` | Path to the file storing the URL list |
+| `OUTPUT_DIR` | `os.path.join(src_dir, "output/")` | Path to the directory where output files are saved |
+| `COLUMN_MAPPER_DIR` | `os.path.join(src_dir, "column_mapper/")` | Path to the directory storing column mappers |
+| `HEADER_ROW_NUMBER` | `2` | Which line contains the header |
+| `HEADER_ROW_PREFIX` | `"#  "` | Prefix for the header row |
+| `CONTEXT_LOCAL_FILE_PATH` | `os.path.join(src_dir, "context.jsonld")` | Path to the local context file |
+| `CONTEXT_FILE_URI` | `"http://example.com/context.jsonld"` | URI for the context file |
+| `INFO_LOG_FILE_PATH` | `os.path.join(src_dir, "info.log")` | Path to the log file |
+| `ERROR_LOG_FILE_PATH` | `os.path.join(src_dir, "error.log")` | Path to the error log file |
+| `NODE_ID_COLUMN` | `"uniprot_entry"` | Column name used as node ID |
+| `NODE_ID_PREFIX` | `"cpdb:"` | Prefix for the node ID |
+| `NODE_TYPE` | `"m2r:MacromolecularComplex"` | Type of the node |
+| `DATA_SOURCE_PREFIX` | `"http://identifiers.org/"` | Prefix for data sources |
+| `REFERENCE_PREFIX` | `"pmid:"` | Prefix for references |
+| `PARTICIPANTS` | `[ "uniprot_entry", "uniprot_id", ]` | List of participants |
+| `TAXONOMY_FILE_PATH` | `os.path.join(src_dir, "taxonomy.json")` | Path to the taxonomy definition file |
+| `JSONLD_MAX_FILE_SIZE` | `3 * 1024 * 1024` | Maximum size of a JSON-LD file (in bytes) |
+
+#### 5.3.2. `src/column_mapper/*.json`
+
+If the column headers in the ConsensusPathDB TSV file are changed, modifications to these definitions are necessary.
+
+#### 5.3.3. `context.jsonld`
+
+This is the definition file for the context used when converting to JSON-LD.
+
+#### 5.3.4. `src/taxonomy.json`
+
+This definition file is for translating taxonomy names to taxonomy IDs.
+
+#### 5.3.5. `src/urls.txt`
+
+This lists the URLs for the CPDB TSV files to be converted.

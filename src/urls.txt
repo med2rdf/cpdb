@@ -1,0 +1,3 @@
+http://cpdb.molgen.mpg.de/download/ConsensusPathDB_human_PPI.gz
+http://cpdb.molgen.mpg.de/download/ConsensusPathDB_yeast_PPI.gz
+http://cpdb.molgen.mpg.de/download/ConsensusPathDB_mouse_PPI.gz

@@ -1,0 +1,6 @@
+{
+    "source_databases": "data_source",
+    "interaction_publications": "reference",
+    "interaction_participants": "uniprot_entry",
+    "interaction_confidence": "confidence"
+}

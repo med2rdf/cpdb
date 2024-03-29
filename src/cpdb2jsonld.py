@@ -1,99 +1,211 @@
-import argparse
+from __future__ import annotations
+
+import gzip
 import json
-import logging
 import os
+import shutil
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Dict, List, Union
+from typing import Any
 
-from pyld import jsonld
-from tqdm import tqdm
-
+import requests
 import settings
+import typer
+from pyld import jsonld
+from typing_extensions import Annotated
+from utils.custom_exception import JsonldConversionResultTypeException
+from utils.rich_loguru import _log_formatter, console, logger
+from utils.rich_progress import RichProgress
 
+logger.remove()
 
-class TqdmLoggingHandler(logging.Handler):
-    def __init__(self, level=logging.NOTSET):
-        """
-        tqdmライブラリの進捗バーにログメッセージを出力するためのハンドラ
-
-        Args:
-            level (int): ログレベル
-        """
-        super().__init__(level)
-
-    def emit(self, record):
-        """ログレコードを処理し、tqdmの進捗バーに出力"""
-        try:
-            msg = self.format(record)
-            tqdm.write(msg)
-        except Exception:
-            self.handleError(record)
-
-
-class URINotFoundException(Exception):
-    """カスタム例外: URIが辞書に見つからない場合に使用"""
-
-    def __init__(self, message="URI not found in the context."):
-        self.message = message
-        super().__init__(self.message)
-
-
-class JsonldConversionResultTypeException(Exception):
-    """JSON-LD変換結果の型が期待と異なる場合の例外"""
-
-    def __init__(
-        self,
-        message="JSON-LD conversion result was an unexpected type.",
-    ):
-        self.message = message
-        super().__init__(self.message)
-
-
-# ログ設定の初期化ブロック
-logger = logging.getLogger(__name__)
 if settings.DEBUG:
-    # DEBUGモードの場合はログレベルをDEBUGに設定
-    logger.setLevel(logging.DEBUG)
+    logger.add(
+        settings.DEBUG_LOG_FILE_PATH,
+        backtrace=True,
+        diagnose=True,
+        level="DEBUG",
+    )
+    logger.add(
+        console.print, format=_log_formatter, colorize=True, level="DEBUG"
+    )
+    logger.add(settings.INFO_LOG_FILE_PATH, level="DEBUG")
 else:
-    # DEBUGモードでない場合はINFOレベルに設定
-    logger.setLevel(logging.INFO)
+    logger.add(
+        console.print, format=_log_formatter, colorize=True, level="INFO"
+    )
+    logger.add(settings.INFO_LOG_FILE_PATH, level="INFO")
 
-# エラーログのファイルハンドラ
-file_handler = logging.FileHandler(settings.ERROR_LOG_FILE_PATH)
-# ログレベルをERRORに設定
-file_handler.setLevel(logging.ERROR)
-# ログフォーマットの設定
-formatter = logging.Formatter(settings.LOG_FORMAT)
-# ファイルハンドラにフォーマッタを設定し、ロガーに追加
-file_handler.setFormatter(formatter)
-logger.addHandler(file_handler)
-
-# TqdmLoggingHandlerのインスタンスを作成し、設定されたフォーマッタを適用後、ロガーに追加
-tqdm_handler = TqdmLoggingHandler()
-tqdm_handler.setFormatter(formatter)
-logger.addHandler(tqdm_handler)
+logger.add(settings.ERROR_LOG_FILE_PATH, level="ERROR")
 
 
-def main(
-    input_file_path: str, output_file_path: str, hide_progress: bool
-) -> None:
+# typer
+app = typer.Typer()
+
+
+@app.command()
+def exec_flow(
+    input_urls_file: Annotated[
+        str,
+        typer.Option(
+            help="File path with the URL of the TSV file as input, "
+            + "separated by a newline."
+        ),
+    ] = settings.URL_LIST_FILE_PATH,
+    output_dir: Annotated[
+        str, typer.Option(help="Path of output directory.")
+    ] = settings.OUTPUT_DIR,
+    hide_progress: Annotated[
+        bool,
+        typer.Option(help="Show progress bar if this option is specified."),
+    ] = False,
+    jsonld_output: Annotated[
+        bool,
+        typer.Option(help="If specified, output will be in JSON-LD format."),
+    ] = False,
+    skip_download: Annotated[
+        bool, typer.Option(help="If specified, TSV downloading is skipped.")
+    ] = False,
+):
+    """Reads a list of specified URLs, downloads TSV files,
+    and converts them to JSONL or JSON-LD.
+
+    Reads URLs from the file path of the string given as input
+    and downloads TSV files from each URL.
+    It then converts the downloaded TSV file to JSONL or JSON-LD format
+    and saves it in the output directory.
+    Display of processing progress and format selection can be optionally controlled.
     """
-    TSVファイルをJSON-LD形式に変換するメイン処理を実行
+    logger.info("Start flow execution...")
+
+    with open(input_urls_file) as f:
+        urls = f.read().split()
+
+    logger.info(f"Number of targets: {len(urls)} files")
+
+    for url in urls:
+        tsv_file_path = tsv_download(url, output_dir, skip_download)
+
+        output_file_path = os.path.join(
+            output_dir,
+            f"{os.path.splitext(os.path.basename(tsv_file_path))[0]}.jsonl",
+        )
+
+        tsv2jsonld(
+            tsv_file_path,
+            output_file_path,
+            hide_progress=hide_progress,
+            jsonld_output=jsonld_output,
+        )
+
+    logger.info("Flow execution completed!")
+
+
+def tsv_download(url: str, data_dir: str, skip_download: bool = False) -> str:
+    """Download and decompress a TSV file from a specified URL.
+
+    Downloads a TSV file from the given URL to the data directory, and if the file
+    is compressed in GZIP format, it decompresses it. Returns the path to the resulting
+    file after successful download and decompression.
 
     Args:
-        input_file_path (str): 入力TSVファイルのパス
-        output_file_path (str): 出力JSONLファイルのパス
-        hide_progress (bool): 進捗バーを非表示にするかどうか
+        url (str): The URL where the TSV file to be downloaded is located.
+        data_dir (str): The path to the directory
+        where the downloaded file will be stored.
+        skip_download (bool): If specified, TSV downloading is skipped.
+
+    Returns:
+        str: The full path to the decompressed TSV file.
+
+    Raises:
+        Exception: An exception is raised if there
+        is a failure in downloading or decompressing.
+
+    """
+    try:
+        logger.info("Start downloading target files...")
+
+        os.makedirs(data_dir, exist_ok=True)
+
+        f_name = url.split("/")[-1]
+
+        f_name_without_ext = os.path.splitext(f_name)[0]
+
+        gzip_file_path = os.path.join(data_dir, f_name)
+
+        decomp_file_path = os.path.join(data_dir, f_name_without_ext)
+
+        if not skip_download:
+            with requests.get(url, stream=True) as r:
+                with open(gzip_file_path, "wb") as f:
+                    for chunk in r.iter_content(chunk_size=1024 * 1024):
+                        f.write(chunk)
+
+            logger.info("Download of target file completed.")
+            logger.info("Start decompression of target files...")
+
+            with gzip.open(gzip_file_path, "rb") as gz_f:
+                with open(decomp_file_path, "wb") as decomp_f:
+                    shutil.copyfileobj(gz_f, decomp_f)
+
+            logger.info("Decompression of the target file is complete.")
+
+        else:
+            logger.info("Download and decompression of target file skipped.")
+
+        return decomp_file_path
+
+    except Exception as e:
+        logger.exception(e)
+
+        raise
+
+
+@app.command()
+def tsv2jsonld(
+    input_file_path: Annotated[
+        str, typer.Argument(help="Path to the input TSV file.")
+    ],
+    output_file_path: Annotated[
+        str, typer.Argument(help="Path to the output JSONL file.")
+    ],
+    taxonomy: Annotated[
+        str,
+        typer.Option(
+            help="""Specify taxonomy.
+            If not specified, the taxonomy is included in the file name.
+            """
+        ),
+    ] = "",
+    hide_progress: Annotated[
+        bool,
+        typer.Option(help="Show progress bar if this option is specified."),
+    ] = False,
+    jsonld_output: Annotated[
+        bool,
+        typer.Option(help="If specified, output will be in JSON-LD format."),
+    ] = False,
+) -> None:
+    """
+    Convert TSV format files to JSON Lines files in JSON-LD format
     """
     # 変換処理開始のログ出力
     logger.info("Starting TSV to JSON-LD convert processing...")
 
     try:
+        # 出力フォルダのチェックと作成
+        output_dir = os.path.dirname(output_file_path)
+        if not os.path.exists(output_dir):
+            os.makedirs(output_dir)
+
+        taxonomy, tax_id = get_taxonomy_id(taxonomy, input_file_path)
+
         # 列名マッピングファイルの読み込み
         logger.info("Loading column mapping...")
 
-        with open(settings.COLUMN_MAPPING_FILE_PATH, "r") as f:
-            column_mapping = json.load(f)
+        with open(
+            os.path.join(settings.COLUMN_MAPPER_DIR, f"{taxonomy}.json"), "r"
+        ) as f:
+            column_mapper = json.load(f)
 
         logger.info("Column mapping loaded.")
 
@@ -104,9 +216,6 @@ def main(
             context = json.load(f)["@context"]
 
         logger.info("JSON-LD context loaded.")
-
-        # JSON-LDファイル内でUniProtエントリを参照するための列名を取得
-        uniprot_entry_column = context[settings.UNIPROT_ENTRY_COLUMN]
 
         logger.info(f"Processing file: {input_file_path}")
 
@@ -133,7 +242,7 @@ def main(
             headers = headers.strip(settings.HEADER_ROW_PREFIX).split("\t")
 
             mapped_headers = [
-                column_mapping.get(header, header) for header in headers
+                column_mapper.get(header, None) for header in headers
             ]
 
             # マルチスレッドで高速化
@@ -141,31 +250,57 @@ def main(
                 logger.info(
                     f"Multithread process: max_workers={executor._max_workers}"
                 )
-                # 各行を処理し、JSON-LD形式のデータに変換して出力ファイルへ書き込み
-                for input_line in tqdm(
-                    input_f,
-                    total=total_lines,
-                    desc="Processing",
-                    unit="rows",
-                    unit_scale=True,
-                    leave=True,
-                    disable=hide_progress,
-                ):
-                    json_str = executor.submit(
-                        line_to_jsonld_line_str,
-                        input_line,
-                        mapped_headers,
-                        uniprot_entry_column,
-                        context,
-                    )
 
-                    output_f.write(json_str.result() + "\n")
+                progress = RichProgress(
+                    unit="rows", hide_progress=hide_progress
+                )
+
+                # 各行を処理し、JSON-LD形式のデータに変換して出力ファイルへ書き込み
+                with progress:
+                    for input_line in progress.track(
+                        input_f,
+                        total=total_lines,
+                        description="Processing...",
+                    ):
+                        json_str = executor.submit(
+                            line_to_jsonld_line_str,
+                            input_line,
+                            mapped_headers,
+                            context,
+                            tax_id,
+                        )
+
+                        output_f.write(json_str.result() + "\n")
+
+        # JSONLをJSON-LD形式で出力する場合の処理
+        if jsonld_output:
+            # 出力ファイル名から拡張子を除去して基本名を取得
+            base = os.path.splitext(output_file_path)[0]
+
+            # 基本名を使用して新しいフォルダパスを生成
+            new_folder_path = os.path.join(
+                os.path.dirname(base), os.path.basename(base) + "_jsonld"
+            )
+
+            # 新しいフォルダが存在しなければ作成
+            if not os.path.exists(new_folder_path):
+                os.makedirs(new_folder_path)
+
+            # JSON-LDファイルの新しい出力パスを設定
+            new_output_path = os.path.join(
+                new_folder_path, os.path.basename(base) + ".jsonld"
+            )
+
+            # JSONLファイルをJSON-LD形式に変換して新しいパスに出力
+            jsonl2json(output_file_path, new_output_path, hide_progress)
 
     except Exception:
         # エラー発生時のロギング
         logger.exception(
             "An error occurred in the main function.",
         )
+
+        raise
 
     finally:
         # 処理完了時のログ出力
@@ -174,41 +309,49 @@ def main(
 
 def line_to_jsonld_line_str(
     input_line: str,
-    mapped_headers: List[str],
-    uniprot_entry_column: str,
-    context: Dict[str, str | Dict[str, str]],
+    mapped_headers: list[str],
+    context: dict[str, str | dict[str, str]],
+    tax_id: Any,
 ):
-    """tsvファイルの1行をJSON-LD形式のJSON Lines 1行に変換する
+    """Converts a single line from a TSV file to a single line
+    in JSON-LD format of JSON Lines.
 
     Args:
-        input_line (str): 変換対象のTSV 1行
-        mapped_headers (List[str]): マッピングされたヘッダー
-        uniprot_entry_column (str): uniprot_entryの列名
-        context (Dict[str, str | Dict[str, str]]): コンテキスト情報
+        input_line (str): The line from TSV to be converted.
+        mapped_headers (list[str]): Mapped headers corresponding to the TSV columns.
+        context (dict[str, str | dict[str, str]]): Context information for JSON-LD.
+        tax_id (Any): Taxonomy ID associated with the record.
 
     Returns:
-        _type_: _description_
+        str: The JSON-LD formatted line as a string.
+
+    Note:
+        This function parses each line from TSV, integrates mapped headers
+        and their corresponding values to form a JSON-LD record,
+        and outputs it as a well-formatted JSON-LD string.
     """
     if input_line.endswith("\n"):
         input_line = input_line.rstrip("\n")
 
     fields = input_line.strip().split("\t")
 
-    parsed_fields = [parse_field(field) for field in fields]
+    parsed_fields: list[
+        str | int | float | list[Any] | dict[str, str | list[str]] | None
+    ] = [parse_field(field) for field in fields]
 
     json_record = dict(zip(mapped_headers, parsed_fields))
 
-    id = generate_node_id(json_record[uniprot_entry_column])
+    json_record = {k: v for k, v in json_record.items() if k is not None}
 
-    json_record["@id"] = expand_uri(settings.NODE_ID_PREFIX, context) + id
+    id = generate_node_id(json_record[settings.NODE_ID_COLUMN])
 
-    json_record["@type"] = expand_uri(settings.NODE_TYPE, context)
+    json_record["@id"] = settings.NODE_ID_PREFIX + id
 
-    json_record[expand_uri("bp3:name", context)] = id
+    json_record["@type"] = settings.NODE_TYPE
 
-    json_record[expand_uri("bp3:displayName", context)] = id
+    json_record["label"] = id
 
-    data_sources = json_record[expand_uri("bp3:dataSource", context)]
+    data_sources = json_record["data_source"]
 
     if isinstance(data_sources, list):
         data_sources = [
@@ -219,78 +362,76 @@ def line_to_jsonld_line_str(
     else:
         data_sources = settings.DATA_SOURCE_PREFIX + str(data_sources).lower()
 
-    json_record[expand_uri("bp3:dataSource", context)] = data_sources
+    json_record["data_source"] = data_sources
 
-    evidences = json_record[expand_uri("bp3:evidence", context)]
+    references = json_record.pop("reference")
 
-    if isinstance(evidences, list):
-        evidences = [
-            settings.EVIDENCE_PREFIX + str(evidence) for evidence in evidences
+    if isinstance(references, list):
+        references = [
+            settings.REFERENCE_PREFIX + str(reference)
+            for reference in references
         ]
 
     else:
-        evidences = settings.EVIDENCE_PREFIX + str(evidences)
+        references = settings.REFERENCE_PREFIX + str(references)
 
-    json_record[expand_uri("bp3:evidence", context)] = evidences
+    json_record["evidence"] = {"reference": references}
 
     # participantの処理
     new_participants = []
 
-    for participant in settings.PARTICIPANTS:
-        if participant in settings.LITERAL_PARTICIPANTS:
-            participant_data = {
-                expand_uri(participant, context): json_record[
-                    expand_uri(participant, context)
-                ]
-            }
+    target_participants = settings.PARTICIPANTS
 
-        else:
-            participant_data = {
-                expand_uri(participant, context): {
-                    "@id": expand_uri(participant, context)
-                    + str(json_record[expand_uri(participant, context)])
-                },
-            }
+    if (
+        settings.UNIPROT_ID_COLUMN not in json_record
+        and settings.UNIPROT_ENTRY_COLUMN not in target_participants
+    ):
+        target_participants.append(settings.UNIPROT_ENTRY_COLUMN)
 
-        new_participants.append(participant_data)
+    if settings.UNIPROT_ENTRY_COLUMN not in target_participants:
+        del json_record[settings.UNIPROT_ENTRY_COLUMN]
 
-        del json_record[expand_uri(participant, context)]
+    for participant in target_participants:
+        if participant in json_record:
+            participant_value = json_record.get(participant)
 
-    json_record[expand_uri("bp3:participant", context)] = new_participants
+            if isinstance(participant_value, list):
+                for participant_data in participant_value:
+                    participant_data = f"{participant}:{participant_data}"
+
+                    new_participants.append(participant_data)
+
+            else:
+                participant_data = f"{participant}:{participant_value}"
+
+                new_participants.append(participant_data)
+
+            del json_record[participant]
+
+    json_record["participant"] = new_participants
+
+    json_record["taxonomy"] = f"taxid:{tax_id}"
 
     jsonld_record = convert_to_jsonld(json_record, context)
-
-    jsonld_record["bp3:dataSource"] = jsonld_record.pop(
-        expand_uri("bp3:dataSource", context)
-    )
-
-    jsonld_record["bp3:evidence"] = jsonld_record.pop(
-        expand_uri("bp3:evidence", context)
-    )
-
-    # JSON-LD変換時に落ちてしまう情報の追加
-    if "bp3:confidence" not in jsonld_record:
-        jsonld_record["bp3:confidence"] = None
-
-    jsonld_record["@context"] = settings.CONTEXT_FILE_URI
 
     json_str = json.dumps(jsonld_record, sort_keys=True)
 
     return json_str
 
 
-def generate_node_id(uniprot_entries: List[str] | Any) -> str:
+def generate_node_id(uniprot_entries: list[str] | Any) -> str:
     """
-    UniProtエントリのリストまたは単一のエントリからノードIDを生成します。
+    Generates a node ID from a list of UniProt entries or a single entry.
 
     Args:
-        uniprot_entries (List[str] | Any): UniProtエントリのリスト、または単一のエントリ。
+        uniprot_entries (list[str] | Any): A list of UniProt entries, or a single entry.
 
     Returns:
-        str: 生成されたノードID。
+        str: The generated node ID.
 
     Raises:
-        Exception: uniprot_entriesの処理中にエラーが発生した場合、ログに記録し、例外を再発します。
+        Exception: If an error occurs during the processing of uniprot_entries,
+        logs the issue and re-raises the exception.
     """
     try:
         if isinstance(uniprot_entries, list):
@@ -307,15 +448,15 @@ def generate_node_id(uniprot_entries: List[str] | Any) -> str:
     return id
 
 
-def parse_field(field: str) -> Union[str, int, float, List[Any], None]:
+def parse_field(field: str) -> str | int | float | list[Any] | None:
     """
-    文字列フィールドを適切な型に変換
+    Converts a string field into an appropriate type.
 
     Args:
-        field (str): 変換する文字列フィールド
+        field (str): The string field to be converted.
 
     Returns:
-        Union[str, int, float, List[Any], None]: 変換後の値
+        Union[str, int, float, list[Any], None]: The converted value.
     """
     # カンマが含まれる場合は、カンマで分割しリストとして返す
     if "," in field:
@@ -339,88 +480,59 @@ def parse_field(field: str) -> Union[str, int, float, List[Any], None]:
             return field
 
 
-def expand_uri(
-    compact_uri: str, context: Dict[str, str | Dict[str, str]]
-) -> str:
-    """
-    指定された文字列に対応するURIを拡大します。
-
-    Parameters:
-        compact_uri (str): 拡大したいURIのプレフィックス文字列
-        context (Dict[str, str]): プレフィックスとURIのマッピングが含まれる辞書
-
-    Returns:
-        str: 拡大されたURI文字列
-
-    Raises:
-        URINotFoundException: 提供されたプレフィックスがcontextに見つからない場合に発生
-    """
-    try:
-        # ':'があるかをチェック
-        if ":" in compact_uri:
-            # ':'を基準に文字列を2つに分割
-            prefix, suffix = compact_uri.split(":", 1)
-        else:
-            prefix = compact_uri
-            suffix = ""
-
-        # 辞書からプレフィックスに対応するURIベースを取得
-        if prefix in context:
-            base_uri = context[prefix]
-
-            if isinstance(base_uri, dict):
-                base_uri = base_uri["@id"]
-
-            # ベースURIが末尾に"#"または"/"を含まない場合、それを付加（suffixが空なら不要）
-            if suffix and not (
-                base_uri.endswith("#") or base_uri.endswith("/")
-            ):
-                base_uri += "#"
-            # 完全なURIを返す（suffixが空ならベースURIのみを返す）
-            return f"{base_uri}{suffix}"
-        else:
-            raise URINotFoundException(
-                f"Prefix '{prefix}' not found in the context."
-            )
-
-    except Exception:
-        logger.exception("An error occurred in the expand_uri function.")
-
-        raise
-
-
 def convert_to_jsonld(
-    json_data: Dict[str, Any], context: Dict[str, Any]
-) -> Dict[str, Any]:
+    json_data: dict[str, Any], context: dict[str, Any]
+) -> dict[str, Any]:
     """
-    JSONデータをJSON-LD形式に変換
+    Convert JSON data to JSON-LD format.
 
     Args:
-        json_data (Dict[str, Any]): 変換するJSONデータ
-        context (Dict[str, Any]): JSON-LDのコンテキスト
+        json_data (dict[str, Any]): The JSON data to convert.
+        context (dict[str, Any]): The JSON-LD context.
 
     Returns:
-        Dict[str, Any]: JSON-LD形式のデータ
+        dict[str, Any]: Data in JSON-LD format.
     """
 
-    # JSON-LDのcompactメソッドを使用して、JSONデータを処理する
+    json_data = {"@context": context} | json_data
+
     try:
-        compacted_data = jsonld.compact(
-            json_data, context, options={"graph": True}
-        )
+        expanded_data = jsonld.expand(json_data)
 
     except Exception:
         # エラーが発生した場合はログに記録し、空の辞書を返す
         logger.exception(
-            "An error occurred when executing jsonld.compact().",
+            f"""
+            An error occurred when executing jsonld.expand().
+            Target JSON:
+            {json_data}
+            """,
         )
 
-        return {}
+        raise
+    # JSON-LDのcompactメソッドを使用して、JSONデータを処理する
+    try:
+        compacted_data = jsonld.compact(expanded_data, context)
 
-    # compacted_dataが辞書型である場合、"@graph"キーの最初の要素を結果として返す
+    except Exception:
+        # エラーが発生した場合はログに記録し、空の辞書を返す
+        logger.exception(
+            f"""
+            An error occurred when executing jsonld.compact().
+            Context:
+            {context}
+            Target JSON:
+            {expanded_data}
+            """
+        )
+
+        raise
+
+    # compacted_dataが辞書型である場合、@contextの値をcontextのURIで上書きする
     try:
         if isinstance(compacted_data, dict):
-            jsonld_record = compacted_data["@graph"][0]
+            if "@context" in compacted_data:
+                compacted_data["@context"] = settings.CONTEXT_FILE_URI
 
         else:
             # compacted_dataが辞書型でない場合は、例外を発生させエラーログに記録する
@@ -442,19 +554,19 @@ def convert_to_jsonld(
 
         raise
 
-    return jsonld_record
+    return compacted_data
 
 
 def jsonl2json(
     jsonl_file_path: str, json_file_path_prefix: str, hide_progress: bool
 ) -> None:
     """
-    JSON LinesファイルをJSON-LD形式にまとめて変換
+    Bulk convert a JSON Lines file to JSON-LD format.
 
     Args:
-        jsonl_file_path (str): 入力JSON Linesファイルのパス
-        json_file_path_prefix (str): 出力JSON-LDファイルの接頭辞
-        hide_progress (bool): 進捗バーを非表示にするかどうか
+        jsonl_file_path (str): Path to the input JSON Lines file.
+        json_file_path_prefix (str): Prefix for the output JSON-LD file.
+        hide_progress (bool): Whether to hide the progress bar or not.
     """
 
     # 変換処理開始のログを出力
@@ -471,23 +583,21 @@ def jsonl2json(
         with open(jsonl_file_path, "r") as f:
             total_lines = sum(1 for line in f)
 
+        progress = RichProgress(unit="lines", hide_progress=hide_progress)
+
         # JSON Linesファイルを開き、データを読み込む
-        with open(jsonl_file_path, "r") as jsonl_file, tqdm(
-            total=total_lines,
-            desc="Converting",
-            unit="lines",
-            unit_scale=True,
-            leave=True,
-            disable=hide_progress,
-        ) as progressbar:
+        with open(jsonl_file_path, "r") as jsonl_file, progress:
             current_size = 0
 
-            for line in jsonl_file:
+            for line in progress.track(
+                jsonl_file,
+                total=total_lines,
+                description="Converting",
+            ):
                 data = json.loads(line)
                 del data["@context"]
                 data_list.append(data)
                 current_size += len(line.encode("utf-8"))
-                progressbar.update(1)
 
                 if (
                     current_size >= settings.JSONLD_MAX_FILE_SIZE
@@ -522,19 +632,19 @@ def jsonl2json(
 
 
 def write_jsonld_file(
-    data_list: List[Dict[str, Any]],
-    context_data: Dict[str, Any],
+    data_list: list[dict[str, Any]],
+    context_data: dict[str, Any],
     json_file_path_prefix: str,
     file_index: int,
 ) -> None:
     """
-    一連のデータをJSON-LD形式でファイルに書き込む
+    Write a series of data to a file in JSON-LD format.
 
     Args:
-        data_list (List[Dict[str, Any]]): 書き込むデータのリスト
-        context_data (Dict[str, Any]): JSON-LDのコンテキストデータ
-        json_file_path_prefix (str): 出力ファイルの接頭辞
-        file_index (int): ファイルインデックス番号
+        data_list (list[dict[str, Any]]): List of data to write.
+        context_data (dict[str, Any]): Context data for JSON-LD.
+        json_file_path_prefix (str): Prefix for the output file.
+        file_index (int): File index number.
     """
 
     try:
@@ -563,61 +673,72 @@ def write_jsonld_file(
         raise
 
 
+def get_taxonomy_id(tax_str: str, tsv_file_path: str) -> tuple[str, Any]:
+    """
+    Loads a taxonomy definition file and retrieves the tax_id
+    corresponding to the provided tax_str.
+
+    This function is used to match a taxonomy string with its taxonomy ID by looking up
+    a TSV file that contains these mappings. It reads the entire TSV file into memory
+    as a dictionary, then attempts to find the taxonomy ID using the provided string as
+    the key. If no direct match is found and the tax_str is empty, it iterates over the
+    entries in the TSV file to find a matching taxonomy name within the filename of the
+    provided file path.
+
+    Args:
+        tax_str (str): The taxonomy string used as key for lookup.
+        tsv_file_path (str): The file path to the input TSV file
+        containing taxonomy mappings.
+
+    Raises:
+        Exception: An exception is raised if there is an issue with the taxonomy
+        definition file such as incorrect format or if no matching taxonomy is found.
+
+    Returns:
+        tuple[str, Any]: A tuple containing the taxonomy_name and
+        the corresponding taxonomy_id.
+
+    Note:
+        The 'settings.TAXONOMY_FILE_PATH' is expected to be defined in the module
+        settings and holds the path to the taxonomy definition TSV file. Also, this
+        function utilizes a logger to log info messages; it should also be defined in
+        the module.
+    """
+    with open(settings.TAXONOMY_FILE_PATH) as f:
+        tax_dict: dict[str, Any] = json.load(f)
+
+        if isinstance(tax_dict, dict):
+            if not tax_str:
+                input_filename = os.path.basename(tsv_file_path)
+
+                for tax_str, tax_id in tax_dict.items():
+                    if tax_str in input_filename:
+                        logger.info(f"Taxonomy: {tax_str}, ID: {tax_id}")
+                        return tax_str, tax_id
+
+                # どのtaxonomy定義ファイルのキーも合致しなかった場合
+                raise Exception(
+                    "The definition in the taxonomy definition file is incorrect."
+                )
+
+            else:
+                tax_id = tax_dict.get(tax_str)
+
+                if tax_id is not None:
+                    logger.info(f"Taxonomy: {tax_str}, ID: {tax_id}")
+                    return tax_str, tax_id
+
+                else:
+                    raise Exception(
+                        "The definition in the taxonomy definition file is incorrect."
+                    )
+
+        else:
+            raise Exception(
+                "The definition in the taxonomy definition file is incorrect."
+            )
+
+
 if __name__ == "__main__":
-    # コマンドライン引数を解析するためのパーサーを作成
-    parser = argparse.ArgumentParser(description="Convert TSV to JSONLD")
-
-    # 入力となるTSVファイルパスの引数を追加
-    parser.add_argument("tsv_file_path", help="Path to the input TSV file")
-
-    # 出力となるJSONLファイルパスの引数を追加
-    parser.add_argument(
-        "output_file_path", help="Path to the output JSONL file"
-    )
-
-    # 進行状況の表示/非表示を切り替えるオプション引数を追加
-    parser.add_argument(
-        "--hide-progress",
-        action="store_true",
-        help="Show progress bar if this option is specified",
-    )
-
-    # 出力フォーマットをJSON-LD形式にするかどうかを選択するオプション引数を追加
-    parser.add_argument(
-        "--jsonld",
-        action="store_true",
-        help="If specified, output will be in JSON-LD format.",
-    )
-
-    # コマンドライン引数を解析
-    args = parser.parse_args()
-
-    # 出力フォルダのチェックと作成
-    output_dir = os.path.dirname(args.output_file_path)
-    if not os.path.exists(output_dir):
-        os.makedirs(output_dir)
-
-    # 主処理関数を呼び出し
-    main(args.tsv_file_path, args.output_file_path, args.hide_progress)
-
-    # JSONLをJSON-LD形式で出力する場合の処理
-    if args.jsonld:
-        # 出力ファイル名から拡張子を除去して基本名を取得
-        base = os.path.splitext(args.output_file_path)[0]
-
-        # 基本名を使用して新しいフォルダパスを生成
-        new_folder_path = os.path.join(
-            os.path.dirname(base), os.path.basename(base) + "_jsonld"
-        )
-
-        # 新しいフォルダが存在しなければ作成
-        if not os.path.exists(new_folder_path):
-            os.makedirs(new_folder_path)
-
-        # JSON-LDファイルの新しい出力パスを設定
-        new_output_path = os.path.join(
-            new_folder_path, os.path.basename(base) + ".jsonld"
-        )
-
-        # JSONLファイルをJSON-LD形式に変換して新しいパスに出力
-        jsonl2json(args.output_file_path, new_output_path, args.hide_progress)
+    # Typer app
+    app()
